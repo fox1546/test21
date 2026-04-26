@@ -20,6 +20,7 @@ BOOL                InitInstance(HINSTANCE, int);
 LRESULT CALLBACK    WndProc(HWND, UINT, WPARAM, LPARAM);
 INT_PTR CALLBACK    About(HWND, UINT, WPARAM, LPARAM);
 
+bool IsValidFaceRect(const Rect& face, int imgWidth, int imgHeight);
 void OpenImageFile(HWND hWnd);
 void DetectFaces(Mat& image);
 void DrawImageWithFaces(HWND hWnd, HDC hdc);
@@ -228,6 +229,23 @@ void OpenImageFile(HWND hWnd)
     InvalidateRect(hWnd, NULL, TRUE);
 }
 
+bool IsValidFaceRect(const Rect& face, int imgWidth, int imgHeight)
+{
+    double aspectRatio = (double)face.width / face.height;
+    if (aspectRatio < 0.4 || aspectRatio > 2.5)
+    {
+        return false;
+    }
+
+    double sizeRatio = (double)face.width * face.height / (imgWidth * imgHeight);
+    if (sizeRatio < 0.0005)
+    {
+        return false;
+    }
+
+    return true;
+}
+
 void DetectFaces(Mat& image)
 {
     g_faces.clear();
@@ -237,7 +255,11 @@ void DetectFaces(Mat& image)
     CascadeClassifier faceCascade;
     std::vector<std::wstring> possiblePaths;
     
+    possiblePaths.push_back(L"F:\\VC\\SDK\\opencv411\\build\\etc\\haarcascades\\haarcascade_frontalface_alt2.xml");
+    possiblePaths.push_back(L"F:\\VC\\SDK\\opencv411\\build\\etc\\haarcascades\\haarcascade_frontalface_alt.xml");
     possiblePaths.push_back(L"F:\\VC\\SDK\\opencv411\\build\\etc\\haarcascades\\haarcascade_frontalface_default.xml");
+    possiblePaths.push_back(L"F:\\VC\\SDK\\opencv411\\etc\\haarcascades\\haarcascade_frontalface_alt2.xml");
+    possiblePaths.push_back(L"F:\\VC\\SDK\\opencv411\\etc\\haarcascades\\haarcascade_frontalface_alt.xml");
     possiblePaths.push_back(L"F:\\VC\\SDK\\opencv411\\etc\\haarcascades\\haarcascade_frontalface_default.xml");
     
     WCHAR szExePath[MAX_PATH] = { 0 };
@@ -248,8 +270,9 @@ void DetectFaces(Mat& image)
     {
         exeDir = exeDir.substr(0, pos + 1);
     }
+    possiblePaths.push_back(exeDir + L"haarcascade_frontalface_alt2.xml");
+    possiblePaths.push_back(exeDir + L"haarcascade_frontalface_alt.xml");
     possiblePaths.push_back(exeDir + L"haarcascade_frontalface_default.xml");
-    possiblePaths.push_back(exeDir + L"haarcascades\\haarcascade_frontalface_default.xml");
 
     bool loaded = false;
     for (const auto& path : possiblePaths)
@@ -266,7 +289,8 @@ void DetectFaces(Mat& image)
     {
         MessageBox(g_hWndMain, 
             L"无法加载人脸检测分类器文件。\n"
-            L"请确保 haarcascade_frontalface_default.xml 文件在以下位置之一：\n"
+            L"请确保 haarcascade_frontalface_alt2.xml 或 haarcascade_frontalface_default.xml \n"
+            L"文件在以下位置之一：\n"
             L"1. F:\\VC\\SDK\\opencv411\\build\\etc\\haarcascades\\\n"
             L"2. F:\\VC\\SDK\\opencv411\\etc\\haarcascades\\\n"
             L"3. 程序运行目录",
@@ -276,9 +300,27 @@ void DetectFaces(Mat& image)
 
     Mat gray;
     cvtColor(image, gray, COLOR_BGR2GRAY);
-    equalizeHist(gray, gray);
+    
+    int minFaceSize = min(image.cols, image.rows) / 20;
+    minFaceSize = max(minFaceSize, 40);
 
-    faceCascade.detectMultiScale(gray, g_faces, 1.1, 3, 0, Size(30, 30));
+    std::vector<Rect> rawFaces;
+    faceCascade.detectMultiScale(
+        gray, 
+        rawFaces, 
+        1.05,
+        5,
+        CASCADE_SCALE_IMAGE,
+        Size(minFaceSize, minFaceSize)
+    );
+
+    for (const auto& face : rawFaces)
+    {
+        if (IsValidFaceRect(face, image.cols, image.rows))
+        {
+            g_faces.push_back(face);
+        }
+    }
 }
 
 void DrawImageWithFaces(HWND hWnd, HDC hdc)
