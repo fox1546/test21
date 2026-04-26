@@ -9,8 +9,6 @@
 HINSTANCE hInst;
 WCHAR szTitle[MAX_LOADSTRING];
 WCHAR szWindowClass[MAX_LOADSTRING];
-GdiplusStartupInput gdiplusStartupInput;
-ULONG_PTR gdiplusToken;
 
 static Mat g_matImage;
 static std::vector<Rect> g_faces;
@@ -27,7 +25,7 @@ void DetectFaces(Mat& image);
 void DrawImageWithFaces(HWND hWnd, HDC hdc);
 std::wstring GetOpenFileNameDialog(HWND hWnd);
 std::string WStringToString(const std::wstring& wstr);
-Mat GdiplusBitmapToMat(Bitmap* bitmap);
+std::wstring StringToWString(const std::string& str);
 
 int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
                      _In_opt_ HINSTANCE hPrevInstance,
@@ -37,15 +35,12 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
     UNREFERENCED_PARAMETER(hPrevInstance);
     UNREFERENCED_PARAMETER(lpCmdLine);
 
-    GdiplusStartup(&gdiplusToken, &gdiplusStartupInput, NULL);
-
     LoadStringW(hInstance, IDS_APP_TITLE, szTitle, MAX_LOADSTRING);
     LoadStringW(hInstance, IDC_MFCDEMO, szWindowClass, MAX_LOADSTRING);
     MyRegisterClass(hInstance);
 
     if (!InitInstance(hInstance, nCmdShow))
     {
-        GdiplusShutdown(gdiplusToken);
         return FALSE;
     }
 
@@ -62,7 +57,6 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
         }
     }
 
-    GdiplusShutdown(gdiplusToken);
     return (int)msg.wParam;
 }
 
@@ -204,6 +198,15 @@ std::string WStringToString(const std::wstring& wstr)
     return str;
 }
 
+std::wstring StringToWString(const std::string& str)
+{
+    if (str.empty()) return std::wstring();
+    int size = MultiByteToWideChar(CP_UTF8, 0, &str[0], (int)str.size(), NULL, 0);
+    std::wstring wstr(size, 0);
+    MultiByteToWideChar(CP_UTF8, 0, &str[0], (int)str.size(), &wstr[0], size);
+    return wstr;
+}
+
 void OpenImageFile(HWND hWnd)
 {
     std::wstring filePath = GetOpenFileNameDialog(hWnd);
@@ -217,42 +220,12 @@ void OpenImageFile(HWND hWnd)
 
     if (g_matImage.empty())
     {
-        Bitmap* pBitmap = Bitmap::FromFile(filePath.c_str());
-        if (pBitmap && pBitmap->GetLastStatus() == Ok)
-        {
-            g_matImage = GdiplusBitmapToMat(pBitmap);
-            delete pBitmap;
-        }
-        else
-        {
-            MessageBox(hWnd, L"无法加载图片，请选择有效的JPG或PNG文件。", L"错误", MB_ICONERROR);
-            if (pBitmap) delete pBitmap;
-            return;
-        }
+        MessageBox(hWnd, L"无法加载图片，请选择有效的JPG或PNG文件。", L"错误", MB_ICONERROR);
+        return;
     }
 
-    if (!g_matImage.empty())
-    {
-        DetectFaces(g_matImage);
-        InvalidateRect(hWnd, NULL, TRUE);
-    }
-}
-
-Mat GdiplusBitmapToMat(Bitmap* bitmap)
-{
-    if (!bitmap) return Mat();
-
-    BitmapData bmpData;
-    Rect rect(0, 0, bitmap->GetWidth(), bitmap->GetHeight());
-    bitmap->LockBits(&rect, ImageLockModeRead, PixelFormat24bppRGB, &bmpData);
-
-    Mat mat(bmpData.Height, bmpData.Width, CV_8UC3, bmpData.Scan0, bmpData.Stride);
-    Mat result;
-    mat.copyTo(result);
-    cvtColor(result, result, COLOR_BGRA2BGR);
-
-    bitmap->UnlockBits(&bmpData);
-    return result;
+    DetectFaces(g_matImage);
+    InvalidateRect(hWnd, NULL, TRUE);
 }
 
 void DetectFaces(Mat& image)
