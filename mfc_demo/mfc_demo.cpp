@@ -6,16 +6,27 @@
 
 #define MAX_LOADSTRING 100
 
-// 全局变量:
-HINSTANCE hInst;                                // 当前实例
-WCHAR szTitle[MAX_LOADSTRING];                  // 标题栏文本
-WCHAR szWindowClass[MAX_LOADSTRING];            // 主窗口类名
+HINSTANCE hInst;
+WCHAR szTitle[MAX_LOADSTRING];
+WCHAR szWindowClass[MAX_LOADSTRING];
 
-// 此代码模块中包含的函数的前向声明:
+static Mat g_matImage;
+static std::vector<Rect> g_faces;
+static std::wstring g_currentFilePath;
+static HWND g_hWndMain = nullptr;
+
 ATOM                MyRegisterClass(HINSTANCE hInstance);
 BOOL                InitInstance(HINSTANCE, int);
 LRESULT CALLBACK    WndProc(HWND, UINT, WPARAM, LPARAM);
 INT_PTR CALLBACK    About(HWND, UINT, WPARAM, LPARAM);
+
+bool IsValidFaceRect(const Rect& face, int imgWidth, int imgHeight);
+void OpenImageFile(HWND hWnd);
+void DetectFaces(Mat& image);
+void DrawImageWithFaces(HWND hWnd, HDC hdc);
+std::wstring GetOpenFileNameDialog(HWND hWnd);
+std::string WStringToString(const std::wstring& wstr);
+std::wstring StringToWString(const std::string& str);
 
 int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
                      _In_opt_ HINSTANCE hPrevInstance,
@@ -25,15 +36,11 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
     UNREFERENCED_PARAMETER(hPrevInstance);
     UNREFERENCED_PARAMETER(lpCmdLine);
 
-    // TODO: 在此处放置代码。
-
-    // 初始化全局字符串
     LoadStringW(hInstance, IDS_APP_TITLE, szTitle, MAX_LOADSTRING);
     LoadStringW(hInstance, IDC_MFCDEMO, szWindowClass, MAX_LOADSTRING);
     MyRegisterClass(hInstance);
 
-    // 执行应用程序初始化:
-    if (!InitInstance (hInstance, nCmdShow))
+    if (!InitInstance(hInstance, nCmdShow))
     {
         return FALSE;
     }
@@ -42,7 +49,6 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 
     MSG msg;
 
-    // 主消息循环:
     while (GetMessage(&msg, nullptr, 0, 0))
     {
         if (!TranslateAccelerator(msg.hwnd, hAccelTable, &msg))
@@ -52,16 +58,11 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
         }
     }
 
-    return (int) msg.wParam;
+    return (int)msg.wParam;
 }
 
 
 
-//
-//  函数: MyRegisterClass()
-//
-//  目标: 注册窗口类。
-//
 ATOM MyRegisterClass(HINSTANCE hInstance)
 {
     WNDCLASSEXW wcex;
@@ -83,19 +84,9 @@ ATOM MyRegisterClass(HINSTANCE hInstance)
     return RegisterClassExW(&wcex);
 }
 
-//
-//   函数: InitInstance(HINSTANCE, int)
-//
-//   目标: 保存实例句柄并创建主窗口
-//
-//   注释:
-//
-//        在此函数中，我们在全局变量中保存实例句柄并
-//        创建和显示主程序窗口。
-//
 BOOL InitInstance(HINSTANCE hInstance, int nCmdShow)
 {
-   hInst = hInstance; // 将实例句柄存储在全局变量中
+   hInst = hInstance;
 
    HWND hWnd = CreateWindowW(szWindowClass, szTitle, WS_OVERLAPPEDWINDOW,
       CW_USEDEFAULT, 0, CW_USEDEFAULT, 0, nullptr, nullptr, hInstance, nullptr);
@@ -105,22 +96,14 @@ BOOL InitInstance(HINSTANCE hInstance, int nCmdShow)
       return FALSE;
    }
 
+   g_hWndMain = hWnd;
+
    ShowWindow(hWnd, nCmdShow);
    UpdateWindow(hWnd);
 
    return TRUE;
 }
 
-//
-//  函数: WndProc(HWND, UINT, WPARAM, LPARAM)
-//
-//  目标: 处理主窗口的消息。
-//
-//  WM_COMMAND  - 处理应用程序菜单
-//  WM_PAINT    - 绘制主窗口
-//  WM_DESTROY  - 发送退出消息并返回
-//
-//
 LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 {
     switch (message)
@@ -128,9 +111,11 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
     case WM_COMMAND:
         {
             int wmId = LOWORD(wParam);
-            // 分析菜单选择:
             switch (wmId)
             {
+            case IDM_OPEN:
+                OpenImageFile(hWnd);
+                break;
             case IDM_ABOUT:
                 DialogBox(hInst, MAKEINTRESOURCE(IDD_ABOUTBOX), hWnd, About);
                 break;
@@ -146,11 +131,13 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
         {
             PAINTSTRUCT ps;
             HDC hdc = BeginPaint(hWnd, &ps);
-            // TODO: 在此处添加使用 hdc 的任何绘图代码...
+            DrawImageWithFaces(hWnd, hdc);
             EndPaint(hWnd, &ps);
         }
         break;
     case WM_DESTROY:
+        g_matImage.release();
+        g_faces.clear();
         PostQuitMessage(0);
         break;
     default:
@@ -159,7 +146,6 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
     return 0;
 }
 
-// “关于”框的消息处理程序。
 INT_PTR CALLBACK About(HWND hDlg, UINT message, WPARAM wParam, LPARAM lParam)
 {
     UNREFERENCED_PARAMETER(lParam);
@@ -177,4 +163,253 @@ INT_PTR CALLBACK About(HWND hDlg, UINT message, WPARAM wParam, LPARAM lParam)
         break;
     }
     return (INT_PTR)FALSE;
+}
+
+std::wstring GetOpenFileNameDialog(HWND hWnd)
+{
+    OPENFILENAME ofn;
+    WCHAR szFile[MAX_PATH] = { 0 };
+    WCHAR szFilter[] = L"图片文件\0*.jpg;*.jpeg;*.png;*.bmp\0JPEG文件\0*.jpg;*.jpeg\0PNG文件\0*.png\0所有文件\0*.*\0";
+
+    ZeroMemory(&ofn, sizeof(ofn));
+    ofn.lStructSize = sizeof(ofn);
+    ofn.hwndOwner = hWnd;
+    ofn.lpstrFile = szFile;
+    ofn.nMaxFile = sizeof(szFile) / sizeof(WCHAR);
+    ofn.lpstrFilter = szFilter;
+    ofn.nFilterIndex = 1;
+    ofn.lpstrFileTitle = NULL;
+    ofn.nMaxFileTitle = 0;
+    ofn.lpstrInitialDir = NULL;
+    ofn.Flags = OFN_PATHMUSTEXIST | OFN_FILEMUSTEXIST | OFN_HIDEREADONLY;
+
+    if (GetOpenFileName(&ofn) == TRUE)
+    {
+        return std::wstring(szFile);
+    }
+    return L"";
+}
+
+std::string WStringToString(const std::wstring& wstr)
+{
+    if (wstr.empty()) return std::string();
+    int size = WideCharToMultiByte(CP_UTF8, 0, &wstr[0], (int)wstr.size(), NULL, 0, NULL, NULL);
+    std::string str(size, 0);
+    WideCharToMultiByte(CP_UTF8, 0, &wstr[0], (int)wstr.size(), &str[0], size, NULL, NULL);
+    return str;
+}
+
+std::wstring StringToWString(const std::string& str)
+{
+    if (str.empty()) return std::wstring();
+    int size = MultiByteToWideChar(CP_UTF8, 0, &str[0], (int)str.size(), NULL, 0);
+    std::wstring wstr(size, 0);
+    MultiByteToWideChar(CP_UTF8, 0, &str[0], (int)str.size(), &wstr[0], size);
+    return wstr;
+}
+
+void OpenImageFile(HWND hWnd)
+{
+    std::wstring filePath = GetOpenFileNameDialog(hWnd);
+    if (filePath.empty()) return;
+
+    g_currentFilePath = filePath;
+    g_faces.clear();
+
+    std::string strPath = WStringToString(filePath);
+    g_matImage = imread(strPath);
+
+    if (g_matImage.empty())
+    {
+        MessageBox(hWnd, L"无法加载图片，请选择有效的JPG或PNG文件。", L"错误", MB_ICONERROR);
+        return;
+    }
+
+    DetectFaces(g_matImage);
+    InvalidateRect(hWnd, NULL, TRUE);
+}
+
+bool IsValidFaceRect(const Rect& face, int imgWidth, int imgHeight)
+{
+    double aspectRatio = (double)face.width / face.height;
+    if (aspectRatio < 0.4 || aspectRatio > 2.5)
+    {
+        return false;
+    }
+
+    double sizeRatio = (double)face.width * face.height / (imgWidth * imgHeight);
+    if (sizeRatio < 0.0005)
+    {
+        return false;
+    }
+
+    return true;
+}
+
+void DetectFaces(Mat& image)
+{
+    g_faces.clear();
+
+    if (image.empty()) return;
+
+    CascadeClassifier faceCascade;
+    std::vector<std::wstring> possiblePaths;
+    
+    possiblePaths.push_back(L"F:\\VC\\SDK\\opencv411\\build\\etc\\haarcascades\\haarcascade_frontalface_alt2.xml");
+    possiblePaths.push_back(L"F:\\VC\\SDK\\opencv411\\build\\etc\\haarcascades\\haarcascade_frontalface_alt.xml");
+    possiblePaths.push_back(L"F:\\VC\\SDK\\opencv411\\build\\etc\\haarcascades\\haarcascade_frontalface_default.xml");
+    possiblePaths.push_back(L"F:\\VC\\SDK\\opencv411\\etc\\haarcascades\\haarcascade_frontalface_alt2.xml");
+    possiblePaths.push_back(L"F:\\VC\\SDK\\opencv411\\etc\\haarcascades\\haarcascade_frontalface_alt.xml");
+    possiblePaths.push_back(L"F:\\VC\\SDK\\opencv411\\etc\\haarcascades\\haarcascade_frontalface_default.xml");
+    
+    WCHAR szExePath[MAX_PATH] = { 0 };
+    GetModuleFileNameW(NULL, szExePath, MAX_PATH);
+    std::wstring exeDir = szExePath;
+    size_t pos = exeDir.find_last_of(L"\\/");
+    if (pos != std::wstring::npos)
+    {
+        exeDir = exeDir.substr(0, pos + 1);
+    }
+    possiblePaths.push_back(exeDir + L"haarcascade_frontalface_alt2.xml");
+    possiblePaths.push_back(exeDir + L"haarcascade_frontalface_alt.xml");
+    possiblePaths.push_back(exeDir + L"haarcascade_frontalface_default.xml");
+
+    bool loaded = false;
+    for (const auto& path : possiblePaths)
+    {
+        std::string strPath = WStringToString(path);
+        if (faceCascade.load(strPath))
+        {
+            loaded = true;
+            break;
+        }
+    }
+
+    if (!loaded)
+    {
+        MessageBox(g_hWndMain, 
+            L"无法加载人脸检测分类器文件。\n"
+            L"请确保 haarcascade_frontalface_alt2.xml 或 haarcascade_frontalface_default.xml \n"
+            L"文件在以下位置之一：\n"
+            L"1. F:\\VC\\SDK\\opencv411\\build\\etc\\haarcascades\\\n"
+            L"2. F:\\VC\\SDK\\opencv411\\etc\\haarcascades\\\n"
+            L"3. 程序运行目录",
+            L"警告", MB_ICONWARNING);
+        return;
+    }
+
+    Mat gray;
+    cvtColor(image, gray, COLOR_BGR2GRAY);
+    
+    int minFaceSize = min(image.cols, image.rows) / 20;
+    minFaceSize = max(minFaceSize, 40);
+
+    std::vector<Rect> rawFaces;
+    faceCascade.detectMultiScale(
+        gray, 
+        rawFaces, 
+        1.05,
+        5,
+        CASCADE_SCALE_IMAGE,
+        Size(minFaceSize, minFaceSize)
+    );
+
+    for (const auto& face : rawFaces)
+    {
+        if (IsValidFaceRect(face, image.cols, image.rows))
+        {
+            g_faces.push_back(face);
+        }
+    }
+}
+
+void DrawImageWithFaces(HWND hWnd, HDC hdc)
+{
+    RECT rectClient;
+    GetClientRect(hWnd, &rectClient);
+    int clientWidth = rectClient.right - rectClient.left;
+    int clientHeight = rectClient.bottom - rectClient.top;
+
+    if (g_matImage.empty())
+    {
+        FillRect(hdc, &rectClient, (HBRUSH)GetStockObject(WHITE_BRUSH));
+        return;
+    }
+
+    int imgWidth = g_matImage.cols;
+    int imgHeight = g_matImage.rows;
+
+    double scaleX = (double)clientWidth / imgWidth;
+    double scaleY = (double)clientHeight / imgHeight;
+    double scale = min(scaleX, scaleY);
+
+    int drawWidth = (int)(imgWidth * scale);
+    int drawHeight = (int)(imgHeight * scale);
+    int offsetX = (clientWidth - drawWidth) / 2;
+    int offsetY = (clientHeight - drawHeight) / 2;
+
+    Mat matToDraw;
+    if (scale != 1.0)
+    {
+        resize(g_matImage, matToDraw, Size(drawWidth, drawHeight), 0, 0, INTER_AREA);
+    }
+    else
+    {
+        matToDraw = g_matImage.clone();
+    }
+
+    for (const auto& face : g_faces)
+    {
+        Rect scaledFace(
+            (int)(face.x * scale),
+            (int)(face.y * scale),
+            (int)(face.width * scale),
+            (int)(face.height * scale)
+        );
+        rectangle(matToDraw, scaledFace, Scalar(0, 0, 255), 2);
+    }
+
+    Mat matBGR;
+    if (matToDraw.channels() == 3)
+    {
+        cvtColor(matToDraw, matBGR, COLOR_BGR2BGRA);
+    }
+    else if (matToDraw.channels() == 1)
+    {
+        cvtColor(matToDraw, matBGR, COLOR_GRAY2BGRA);
+    }
+    else
+    {
+        matBGR = matToDraw.clone();
+    }
+
+    BITMAPINFO bmi;
+    ZeroMemory(&bmi, sizeof(bmi));
+    bmi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+    bmi.bmiHeader.biWidth = matBGR.cols;
+    bmi.bmiHeader.biHeight = -matBGR.rows;
+    bmi.bmiHeader.biPlanes = 1;
+    bmi.bmiHeader.biBitCount = 32;
+    bmi.bmiHeader.biCompression = BI_RGB;
+
+    FillRect(hdc, &rectClient, (HBRUSH)GetStockObject(COLOR_WINDOW + 1));
+
+    StretchDIBits(hdc,
+        offsetX, offsetY,
+        drawWidth, drawHeight,
+        0, 0,
+        matBGR.cols, matBGR.rows,
+        matBGR.data,
+        &bmi,
+        DIB_RGB_COLORS,
+        SRCCOPY);
+
+    if (!g_faces.empty())
+    {
+        WCHAR szText[100];
+        swprintf_s(szText, L"检测到 %d 个人脸", (int)g_faces.size());
+        SetTextColor(hdc, RGB(255, 0, 0));
+        SetBkMode(hdc, TRANSPARENT);
+        TextOutW(hdc, 10, 10, szText, (int)wcslen(szText));
+    }
 }

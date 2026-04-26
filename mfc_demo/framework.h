@@ -2,14 +2,29 @@
 // 或特定于项目的包含文件
 //
 
+
 #pragma once
 
 #include "targetver.h"
-#define WIN32_LEAN_AND_MEAN             // 从 Windows 头文件中排除极少使用的内容
-// Windows 头文件
+
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+
 #include <windows.h>
-// C 运行时头文件
+#include <commdlg.h>
+
 #include <stdlib.h>
 #include <malloc.h>
 #include <memory.h>
 #include <tchar.h>
+#include <vector>
+#include <string>
+
+#include <opencv2/opencv.hpp>
+
+using namespace cv;
